@@ -1,71 +1,62 @@
 import random
-import numpy as np
-import matplotlib.pyplot as plt
 
 random.seed(0)
 
-# TODO: documentation and comments
+# ===PARAMETERS===
 
-# ***PARAMETERS***
-
-NUM_SENSORS = 10
+NUM_SENSORS      = 5
 
 # Actions
-WAIT = 0
-TRANSMIT = 1
-ACTIONS = [WAIT, TRANSMIT]
+WAIT             = 0
+TRANSMIT         = 1
+ACTIONS          = [WAIT, TRANSMIT]
 
-# Transmission Status
-IDLE = 0
-SUCCESS = 1
-COLLISION = 2
+# Transmission status
+IDLE             = 0
+SUCCESS          = 1
+COLLISION        = 2
 
 # Q-learning
-gamma = 0.85
-#num_time_slots = NUM_SENSORS * 25
-num_time_slots = 100
+gamma            = 0.85
+alpha            = 0.05
+num_time_slots   = 100
+num_episodes     = 5000
 
-#num_episodes = 50000 + NUM_SENSORS * 10000
-num_episodes = 50000
+# Exploration (epsilon-greedy decay)
+epsilon_start    = 1.0
+epsilon_end      = 0.05
+epsilon_decay    = (epsilon_end / epsilon_start) ** (1 / num_episodes)
 
+# AoI
+A_MAX            = NUM_SENSORS * 4
 
-# Exploration
-alpha = 0.05
-epsilon_start = 1.0
-epsilon_end = 0.05
-epsilon_decay = (epsilon_end / epsilon_start) ** (1 / num_episodes)
-
-# AoI cap
-A_MAX = NUM_SENSORS * 4
-
-# Power Usage
-ENERGY_COST = 2
-POWER_BUDGET = int((num_time_slots / NUM_SENSORS) * ENERGY_COST * 1.5)
-#POWER_BUDGET = NUM_SENSORS * 50
+# Power
+ENERGY_COST      = 2
+POWER_BUDGET     = int((num_time_slots / NUM_SENSORS) * ENERGY_COST * 1.2)
 
 # Evaluation
 num_eval_episodes = 1000
 
-# TODO: add documentation
 class Sensor:
-    def __init__(self):
+    def __init__(self, priority):
         self.aoi = 1
+        self.priority = priority
         self.last_outcome = IDLE
         self.power_budget = POWER_BUDGET
         self.q_table = {}
 
     def get_reward(self):
-        bonus = 0
-        
         if self.last_outcome == SUCCESS:
-            bonus += 20
+            bonus = 0.5 * NUM_SENSORS * 2
         elif self.last_outcome == COLLISION:
-            bonus -= 20 + NUM_SENSORS * 2
+            bonus = -2.5 * NUM_SENSORS * 2
+        else: # IDLE
+            bonus = -0.25 * NUM_SENSORS * 2
 
-        aoi_penalty = -min(self.aoi, A_MAX) ** 1.3
+        aoi_penalty = -self.priority * min(self.aoi, A_MAX) ** 1.1
         
         return aoi_penalty + bonus
-
+        
     def reset(self):
         self.aoi = 1
 
@@ -97,7 +88,8 @@ class WirelessSensorNetwork:
     def __init__(self, num_sensors):
         self.num_sensors = num_sensors
         self.time = 0
-        self.sensors = [Sensor() for _ in range(num_sensors)]
+        priorities = [1.5 if i < num_sensors // 2 else 1.0 for i in range(num_sensors)]
+        self.sensors = [Sensor(priority=p) for p in priorities]
         self.past_rewards = []
 
     def step(self, actions):
@@ -179,74 +171,11 @@ class WirelessSensorNetwork:
 
         return cumulative_reward
 
-if __name__ == "__main__":
-    network = WirelessSensorNetwork(num_sensors=NUM_SENSORS)
-
-    epsilon = epsilon_start
-
-    # ***TRAINING LOOP***
-    for it in range(num_episodes):
-        episode_return = 0
-
-        for t in range(num_time_slots):
-            actions = []
-            for sensor in network.sensors:
-                state = sensor.get_state()
-                actions.append(sensor.choose_action(state, epsilon))
-
-            step_reward = network.step(actions)
-            episode_return += step_reward
-
-        network.past_rewards.append(episode_return)
-        epsilon *= epsilon_decay
-        network.reset()
-
-    # ***EVALUATION LOOP***
-    avg_aoi = [0.0] * num_time_slots
-
-    for it in range(num_eval_episodes):
-        network.reset()
-
-        for t in range(num_time_slots):
-            actions = []
-            for sensor in network.sensors:
-                state = sensor.get_state()
-                actions.append(sensor.choose_action(state, epsilon=0.0))  # purely greedy
-
-            network.step(actions)
-            avg_aoi[t] += network.get_avg_aoi()
-
-    avg_aoi = [aoi / num_eval_episodes for aoi in avg_aoi]
-
-    for i, s in enumerate(network.sensors):
-        print(f"Sensor {i} Q entries:", len(s.q_table))
-        some = list(s.q_table.items())[:400]
-        for k, v in some:
-            print(" ", k, "->", round(v, 3))
-
-    window = 2000
-    smoothed = np.convolve(network.past_rewards, np.ones(window) / window, mode='valid')
-
-    plt.plot(network.past_rewards, alpha=0.2, label="Raw Reward")
-    plt.plot(smoothed, label=f"Smoothed (window={window})")
-    plt.title(f"MARL AoI Optimization Performance: {network.num_sensors} Sensors")
-    plt.xlabel("# of Episodes")
-    plt.ylabel("Cumulative Reward")
-    plt.legend()
-    plt.show()
-
-    baseline = (NUM_SENSORS + 1) / 2
-
-    plt.plot(avg_aoi, label="MARL (Greedy Eval)")
-    plt.axhline(y=baseline, linestyle="--", label="Round Robin Baseline", color="red")
-
-    plt.title(f"Average AoI Over {num_eval_episodes} Greedy Eval Episodes: {network.num_sensors} Sensors")
-    plt.xlabel("Time Slot")
-    plt.ylabel("Average AoI")
-    plt.legend()
-    plt.show()
-
-    mean_aoi = sum(avg_aoi) / len(avg_aoi)
-    print(f"The mean is: {mean_aoi}")
-
-# TODO: Compare with other AoI optimization strategies: LCFS, etc
+def random_policy(sensors):
+    actions = []
+    for sensor in sensors:
+        if sensor.power_budget <= 0:
+            actions.append(WAIT)
+        else:
+            actions.append(TRANSMIT if random.random() < 1 / len(sensors) else WAIT)
+    return actions
